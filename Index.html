@@ -1,0 +1,593 @@
+// ============================================================
+//  تطبيق قصص مصورة - ملف كامل
+//  تثبيت: npx expo install expo-image-picker @react-native-async-storage/async-storage expo-device
+//  ثم:   npm install firebase
+// ============================================================
+
+import React, { useEffect, useState } from "react";
+import {
+  View, Text, TextInput, Image, ScrollView, StyleSheet, Alert,
+  Modal, ActivityIndicator, TouchableOpacity, Linking, Share,
+} from "react-native";
+import * as ImagePicker from "expo-image-picker";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Device from "expo-device";
+import { initializeApp } from "firebase/app";
+import {
+  getFirestore, doc, runTransaction, getDoc, writeBatch,
+} from "firebase/firestore";
+
+// ==================== إعدادات Firebase ====================
+// ⚠️ ضع بياناتك هنا من Firebase Console
+const firebaseConfig = {
+  apiKey: "PUT_YOUR_API_KEY",
+  authDomain: "PUT_PROJECT.firebaseapp.com",
+  projectId: "PUT_PROJECT_ID",
+  storageBucket: "PUT_PROJECT.appspot.com",
+  messagingSenderId: "PUT_SENDER_ID",
+  appId: "PUT_APP_ID",
+};
+
+const firebaseApp = initializeApp(firebaseConfig);
+const db = getFirestore(firebaseApp);
+
+// ==================== إعدادات التطبيق ====================
+const FREE_LIMIT = 2;                              // أول قصتين مجانيتين
+const PAY_AMOUNT = 5;                              // شيكل
+const PAY_PHONE = "0599497456";                    // بنك فلسطين
+const ACCOUNT_NAME = "شركة رمح للخدمات الإلكترونية";
+const INSTAGRAM_URL = "https://www.instagram.com/"; // ضع رابط حسابك
+const TOTAL_CODES = 200;                           // عدد الأكواد
+const ADMIN_PASSWORD = "RMAH2026";                 // ⚠️ غيّرها
+
+const FREE_USED_KEY = "rmah_free_used_v1";
+const CREDITS_KEY = "rmah_credits_v1";
+
+// ==================== توليد الأكواد ====================
+function makeCode(i) {
+  const base = String(i).padStart(4, "0");
+  const sum = [...base].reduce((a, c) => a + parseInt(c), 0);
+  return `RMAH-${base}-${sum % 10}`;
+}
+
+function validateCodeFormat(input) {
+  const cleaned = (input || "").trim().toUpperCase().replace(/\s+/g, "");
+  const m = cleaned.match(/^RMAH-(\d{4})-(\d)$/);
+  if (!m) return null;
+  const num = parseInt(m[1]);
+  if (num < 1 || num > TOTAL_CODES) return null;
+  const expected = [...m[1]].reduce((a, c) => a + parseInt(c), 0) % 10;
+  return parseInt(m[2]) === expected ? makeCode(num) : null;
+}
+
+// ==================== الشخصيات ====================
+const CHARACTERS = [
+  { id: "superman",  name: "سوبرمان",   emoji: "🦸‍♂️", color: "#1E88E5" },
+  { id: "ronaldo",   name: "رونالدو",   emoji: "⚽",  color: "#43A047" },
+  { id: "mickey",    name: "ميكي ماوس", emoji: "🐭",  color: "#E53935" },
+  { id: "spiderman", name: "سبايدرمان", emoji: "🕷️",  color: "#D32F2F" },
+  { id: "elsa",      name: "إلسا",      emoji: "❄️",  color: "#039BE5" },
+  { id: "batman",    name: "باتمان",    emoji: "🦇",  color: "#212121" },
+];
+
+// ==================== قوالب القصص ====================
+const buildPanels = (name) => ({
+  superman: [
+    `في صباح مشمس، اكتشف ${name} أن صديقه سوبرمان يحتاج إلى مساعدته.`,
+    `طار ${name} مع سوبرمان فوق المدينة لإنقاذ قطة صغيرة عالقة على سطح عالٍ.`,
+    `بشجاعة كبيرة، ساعدا معًا الجميع، وكان سوبرمان فخورًا بـ${name}.`,
+    `عاد ${name} إلى البيت بطلًا صغيرًا، مبتسمًا ومعه حكاية جميلة.`,
+  ],
+  ronaldo: [
+    `في الملعب الكبير، التقى ${name} بنجمه المفضل رونالدو.`,
+    `علّمه رونالدو كيف يراوغ الكرة ويسدد بقوة نحو المرمى.`,
+    `سجّل ${name} هدفًا رائعًا وسط تصفيق الجميع!`,
+    `احتفل ${name} مع رونالدو بالفوز العظيم، وعاد يحلم بمستقبل كبير.`,
+  ],
+  mickey: [
+    `في عالم ميكي السحري، دخل ${name} إلى نادي ميكي ماوس.`,
+    `لعب مع ميكي وميني وبطوط ألعابًا مضحكة ومغامرات رائعة.`,
+    `ساعد ${name} ميكي على حل لغز صندوق الكنز المفقود.`,
+    `ودّع ميكي صديقه ${name} وواعدوه بلقاء جديد قريب.`,
+  ],
+  spiderman: [
+    `في المدينة الكبيرة، رأى ${name} سبايدرمان يتحرك بين المباني.`,
+    `تعلّم ${name} من سبايدرمان كيف يساعد الناس ويحمي الحي.`,
+    `معًا أنقذا عائلة عالقة في مصعد معطل بشجاعة.`,
+    `عاد ${name} إلى البيت يردد شعار: "مع القوة تأتي المسؤولية".`,
+  ],
+  elsa: [
+    `في مملكة الجليد الساحرة، قابلت ${name} الأميرة إلسا.`,
+    `علّمتها إلسا كيف تصنع أشكالًا جميلة من الثلج والجليد.`,
+    `معًا أنقذتا مملكة الثلج من عاصفة قوية بحب وتعاون.`,
+    `عاد ${name} إلى البيت وهي تحمل ذكرى أجمل مغامرة شتوية.`,
+  ],
+  batman: [
+    `في ليلة هادئة، ظهر باتمان أمام ${name} لطلب المساعدة.`,
+    `تعلّم ${name} كيف يكون شجاعًا وذكيًا مثل باتمان.`,
+    `معًا أحبطا خطة شريرة لحماية مدينة جوثام.`,
+    `عاد ${name} إلى البيت فخورًا، فباتمان يعرف أنه بطل حقيقي.`,
+  ],
+});
+
+// ==================== التطبيق ====================
+export default function App() {
+  // بيانات الطفل
+  const [childName, setChildName] = useState("");
+  const [photo, setPhoto] = useState(null);
+  const [selectedChar, setSelectedChar] = useState(null);
+  const [story, setStory] = useState(null);
+
+  // حالة الرصيد
+  const [freeUsed, setFreeUsed] = useState(0);
+  const [credits, setCredits] = useState(0);
+  const [ready, setReady] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [redeeming, setRedeeming] = useState(false);
+
+  // النوافذ
+  const [charModal, setCharModal] = useState(false);
+  const [paywall, setPaywall] = useState(false);
+  const [codeModal, setCodeModal] = useState(false);
+  const [adminModal, setAdminModal] = useState(false);
+  const [codesListModal, setCodesListModal] = useState(false);
+  const [adminPass, setAdminPass] = useState("");
+  const [allCodes, setAllCodes] = useState([]);
+  const [seeding, setSeeding] = useState(false);
+  const [codeInput, setCodeInput] = useState("");
+
+  // تحميل الحالة عند البدء
+  useEffect(() => {
+    (async () => {
+      const f = await AsyncStorage.getItem(FREE_USED_KEY);
+      const c = await AsyncStorage.getItem(CREDITS_KEY);
+      setFreeUsed(parseInt(f || "0"));
+      setCredits(parseInt(c || "0"));
+      setReady(true);
+    })();
+  }, []);
+
+  // اختيار الصورة
+  const pickImage = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      return Alert.alert("إذن مطلوب", "نحتاج الوصول للصور");
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+    if (!res.canceled) setPhoto(res.assets[0].uri);
+  };
+
+  const canGenerate = () => freeUsed < FREE_LIMIT || credits > 0;
+
+  // توليد القصة
+  const generateStory = () => {
+    if (!childName.trim()) return Alert.alert("تنبيه", "اكتب اسم الطفل أولًا");
+    if (!photo) return Alert.alert("تنبيه", "اختر صورة واحدة");
+    if (!selectedChar) return Alert.alert("تنبيه", "اختر الشخصية أولًا");
+    if (!canGenerate()) { setPaywall(true); return; }
+
+    setLoading(true);
+    const char = CHARACTERS.find(c => c.id === selectedChar);
+    setTimeout(async () => {
+      const panels = buildPanels(childName.trim())[selectedChar];
+      setStory({ title: `مغامرة ${childName.trim()} مع ${char.name}`, char, panels });
+
+      if (freeUsed < FREE_LIMIT) {
+        const next = freeUsed + 1;
+        setFreeUsed(next);
+        await AsyncStorage.setItem(FREE_USED_KEY, String(next));
+      } else {
+        const next = credits - 1;
+        setCredits(next);
+        await AsyncStorage.setItem(CREDITS_KEY, String(next));
+      }
+      setLoading(false);
+    }, 900);
+  };
+
+  // التفعيل بكود — يتحقق من Firebase ويحوّله لـ used:true فورًا
+  const submitCode = async () => {
+    const code = validateCodeFormat(codeInput);
+    if (!code) return Alert.alert("كود غير صحيح", "الصيغة: RMAH-0000-0");
+
+    setRedeeming(true);
+    try {
+      const codeRef = doc(db, "codes", code);
+      const deviceId = Device.osInternalBuildId || "device";
+
+      await runTransaction(db, async (tx) => {
+        const snap = await tx.get(codeRef);
+        if (!snap.exists()) throw new Error("❌ هذا الكود غير موجود في النظام");
+        const d = snap.data();
+        if (d.used) throw new Error("❌ هذا الكود مستخدم بالفعل ولا يمكن استخدامه مرة أخرى");
+        if (d.revoked) throw new Error("❌ تم إلغاء هذا الكود من الشركة");
+
+        tx.update(codeRef, {
+          used: true,
+          usedAt: new Date().toISOString(),
+          usedBy: deviceId,
+          valid: false,
+        });
+      });
+
+      const next = credits + 1;
+      setCredits(next);
+      await AsyncStorage.setItem(CREDITS_KEY, String(next));
+      setCodeInput("");
+      setCodeModal(false);
+      setPaywall(false);
+      Alert.alert("✅ تم التفعيل", "تم فتح قصة واحدة. الكود أصبح غير صالح نهائيًا.");
+    } catch (e) {
+      Alert.alert("فشل التفعيل", e.message || "تحقق من الاتصال بالإنترنت");
+    } finally {
+      setRedeeming(false);
+    }
+  };
+
+  // تحقق سريع من صلاحية الكود قبل التفعيل
+  const checkCode = async () => {
+    const code = validateCodeFormat(codeInput);
+    if (!code) return Alert.alert("صيغة غير صحيحة", "الصيغة: RMAH-0000-0");
+    try {
+      const snap = await getDoc(doc(db, "codes", code));
+      if (!snap.exists()) return Alert.alert("❌ غير موجود", "هذا الكود غير موجود في النظام");
+      const d = snap.data();
+      if (d.used) return Alert.alert("⚠️ مستخدم", `استُخدم بتاريخ ${d.usedAt?.slice(0,10) || "سابق"}`);
+      if (d.revoked) return Alert.alert("⛔ ملغى", "هذا الكود أُلغي من الشركة");
+      Alert.alert("✅ صالح", "يمكنك الضغط على تفعيل");
+    } catch (e) {
+      Alert.alert("خطأ", e.message);
+    }
+  };
+
+  // نسخ اسم الحساب
+  const copyAccount = async () => {
+    try { await Share.share({ message: ACCOUNT_NAME }); } catch {}
+  };
+
+  // ==================== وظائف الأدمن ====================
+  const openAdmin = () => {
+    setAdminPass("");
+    setAdminModal(true);
+  };
+
+  const confirmAdmin = () => {
+    if (adminPass !== ADMIN_PASSWORD) return Alert.alert("خطأ", "كلمة مرور غير صحيحة");
+    setAdminModal(false);
+    Alert.alert(
+      "لوحة الأدمن",
+      "اختر العملية:",
+      [
+        { text: "رفع 200 كود إلى Firebase", onPress: seedCodes },
+        { text: "عرض كل الأكواد", onPress: showAllCodes },
+        { text: "إلغاء", style: "cancel" },
+      ]
+    );
+  };
+
+  const seedCodes = async () => {
+    setSeeding(true);
+    try {
+      const batch = writeBatch(db);
+      for (let i = 1; i <= TOTAL_CODES; i++) {
+        const code = makeCode(i);
+        batch.set(doc(db, "codes", code), {
+          code,
+          used: false,
+          usedAt: null,
+          usedBy: null,
+          revoked: false,
+          valid: true,
+          createdAt: new Date().toISOString(),
+        });
+      }
+      await batch.commit();
+      Alert.alert("✅ تم", `تم رفع ${TOTAL_CODES} كود إلى Firebase.`);
+    } catch (e) {
+      Alert.alert("خطأ", e.message);
+    } finally {
+      setSeeding(false);
+    }
+  };
+
+  const showAllCodes = () => {
+    const list = [];
+    for (let i = 1; i <= TOTAL_CODES; i++) list.push(makeCode(i));
+    setAllCodes(list);
+    setCodesListModal(true);
+  };
+
+  // ==================== الواجهة ====================
+  if (!ready) {
+    return <View style={styles.center}><ActivityIndicator size="large" /></View>;
+  }
+
+  const freeLeft = Math.max(0, FREE_LIMIT - freeUsed);
+  const totalAvail = freeLeft + credits;
+  const selectedCharObj = selectedChar ? CHARACTERS.find(c => c.id === selectedChar) : null;
+
+  return (
+    <ScrollView contentContainerStyle={styles.container}>
+      {/* العنوان — ضغطة طويلة تفتح لوحة الأدمن */}
+      <TouchableOpacity onLongPress={openAdmin} delayLongPress={1500} activeOpacity={1}>
+        <Text style={styles.h1}>📖 قصص مصورة</Text>
+      </TouchableOpacity>
+      <Text style={styles.sub}>صمّم قصة طفلك مع شخصيته المفضلة</Text>
+
+      {/* الاسم */}
+      <Text style={styles.label}>اسم الطفل</Text>
+      <TextInput
+        style={styles.input}
+        value={childName}
+        onChangeText={setChildName}
+        placeholder="مثال: عبدالله"
+        textAlign="right"
+      />
+
+      {/* الصورة */}
+      <Text style={styles.label}>صورة الطفل (واحدة فقط)</Text>
+      <TouchableOpacity style={styles.imgBtn} onPress={pickImage}>
+        {photo ? (
+          <Image source={{ uri: photo }} style={styles.photo} />
+        ) : (
+          <View style={styles.photoPlaceholder}>
+            <Text style={{ fontSize: 40 }}>📷</Text>
+            <Text style={styles.smallText}>اضغط لاختيار صورة</Text>
+          </View>
+        )}
+      </TouchableOpacity>
+
+      {/* اختيار الشخصية */}
+      <TouchableOpacity
+        style={[styles.btn, { backgroundColor: "#6A4C93" }]}
+        onPress={() => photo ? setCharModal(true) : Alert.alert("تنبيه", "اختر صورة أولًا")}
+      >
+        <Text style={styles.btnText}>
+          {selectedCharObj
+            ? `الشخصية: ${selectedCharObj.emoji} ${selectedCharObj.name}`
+            : "🎭 اختر الشخصية"}
+        </Text>
+      </TouchableOpacity>
+
+      {/* عداد الرصيد */}
+      <View style={styles.countBox}>
+        <Text style={styles.countText}>
+          المتاح الآن: <Text style={{ fontWeight: "bold", color: "#2A9D8F" }}>{totalAvail}</Text>
+        </Text>
+        <Text style={styles.countHint}>
+          مجاني متبقٍ: {freeLeft}  •  مدفوع: {credits}
+        </Text>
+      </View>
+
+      {/* زر التوليد */}
+      <TouchableOpacity
+        style={[styles.btn, styles.primary]}
+        onPress={generateStory}
+        disabled={loading}
+      >
+        <Text style={styles.btnText}>{loading ? "جاري إنشاء القصة..." : "✨ أنشئ القصة"}</Text>
+      </TouchableOpacity>
+
+      {/* زر إدخال كود */}
+      <TouchableOpacity style={[styles.btn, { backgroundColor: "#888" }]} onPress={() => setCodeModal(true)}>
+        <Text style={styles.btnText}>🔑 لدي كود فتح</Text>
+      </TouchableOpacity>
+
+      {/* عرض القصة */}
+      {story && (
+        <View style={{ marginTop: 20 }}>
+          <Text style={styles.title}>{story.title}</Text>
+          {story.panels.map((text, i) => (
+            <View key={i} style={styles.panel}>
+              <View style={{ position: "relative" }}>
+                <Image source={{ uri: photo }} style={styles.panelImg} />
+                <View style={[styles.charOverlay, { backgroundColor: story.char.color }]}>
+                  <Text style={{ fontSize: 26 }}>{story.char.emoji}</Text>
+                </View>
+                <View style={styles.panelBadge}>
+                  <Text style={{ color: "#fff", fontSize: 12 }}>لوحة {i + 1}</Text>
+                </View>
+              </View>
+              <Text style={styles.panelText}>{text}</Text>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {/* ============ نافذة اختيار الشخصية ============ */}
+      <Modal visible={charModal} transparent animationType="slide" onRequestClose={() => setCharModal(false)}>
+        <View style={styles.modalBg}>
+          <View style={styles.modal}>
+            <Text style={styles.title}>اختر شخصية القصة</Text>
+            <View style={styles.charGrid}>
+              {CHARACTERS.map(c => (
+                <TouchableOpacity
+                  key={c.id}
+                  style={[
+                    styles.charCard,
+                    { borderColor: selectedChar === c.id ? c.color : "#eee" },
+                    selectedChar === c.id && { backgroundColor: c.color + "15" },
+                  ]}
+                  onPress={() => { setSelectedChar(c.id); setCharModal(false); }}
+                >
+                  <Text style={{ fontSize: 34 }}>{c.emoji}</Text>
+                  <Text style={[styles.charName, selectedChar === c.id && { color: c.color, fontWeight: "bold" }]}>
+                    {c.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TouchableOpacity onPress={() => setCharModal(false)}>
+              <Text style={styles.close}>إغلاق</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ============ نافذة الدفع ============ */}
+      <Modal visible={paywall} transparent animationType="slide" onRequestClose={() => setPaywall(false)}>
+        <View style={styles.modalBg}>
+          <View style={styles.modal}>
+            <ScrollView>
+              <Text style={styles.title}>انتهت القصص المجانية</Text>
+              <Text style={styles.modalText}>
+                لإنشاء قصة جديدة، حوّل {PAY_AMOUNT} شيكل على بنك فلسطين:
+              </Text>
+              <View style={styles.infoBox}>
+                <Text style={styles.infoLabel}>رقم التحويل</Text>
+                <Text style={styles.infoValue}>{PAY_PHONE}</Text>
+                <Text style={styles.infoLabel}>المستفيد</Text>
+                <Text style={styles.infoValue}>{ACCOUNT_NAME}</Text>
+              </View>
+              <Text style={styles.modalText}>ثم أرسل صورة الإشعار على الإنستغرام:</Text>
+              <TouchableOpacity
+                style={styles.instaBtn}
+                onPress={() => Linking.openURL(INSTAGRAM_URL).catch(() => {})}
+              >
+                <Text style={styles.btnText}>📩 {ACCOUNT_NAME}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.btn, { backgroundColor: "#555" }]} onPress={copyAccount}>
+                <Text style={styles.btnText}>📋 نسخ اسم الحساب</Text>
+              </TouchableOpacity>
+              <Text style={styles.modalText}>
+                بعد التحقق سنرسل لك كود فتح. كل كود يفتح قصة واحدة فقط.
+              </Text>
+              <TouchableOpacity
+                style={[styles.btn, styles.primary]}
+                onPress={() => { setPaywall(false); setCodeModal(true); }}
+              >
+                <Text style={styles.btnText}>🔑 لدي كود فتح</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setPaywall(false)}>
+                <Text style={styles.close}>إغلاق</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ============ نافذة إدخال الكود ============ */}
+      <Modal visible={codeModal} transparent animationType="fade" onRequestClose={() => setCodeModal(false)}>
+        <View style={styles.modalBg}>
+          <View style={styles.modal}>
+            <Text style={styles.title}>أدخل كود الفتح</Text>
+            <Text style={styles.modalText}>كل كود يعمل مرة واحدة فقط لفتح قصة واحدة.</Text>
+            <TextInput
+              style={[styles.input, { textAlign: "center", fontSize: 18, letterSpacing: 2 }]}
+              value={codeInput}
+              onChangeText={setCodeInput}
+              placeholder="RMAH-0000-0"
+              autoCapitalize="characters"
+            />
+            <TouchableOpacity
+              style={[styles.btn, styles.primary]}
+              onPress={submitCode}
+              disabled={redeeming}
+            >
+              <Text style={styles.btnText}>{redeeming ? "جاري التحقق..." : "تفعيل"}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.btn, { backgroundColor: "#888" }]} onPress={checkCode}>
+              <Text style={styles.btnText}>🔍 تحقق من الكود أولًا</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setCodeModal(false)}>
+              <Text style={styles.close}>إلغاء</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ============ نافذة الأدمن (كلمة سر) ============ */}
+      <Modal visible={adminModal} transparent animationType="fade" onRequestClose={() => setAdminModal(false)}>
+        <View style={styles.modalBg}>
+          <View style={styles.modal}>
+            <Text style={styles.title}>🔐 لوحة الأدمن</Text>
+            <Text style={styles.modalText}>أدخل كلمة المرور للوصول لإدارة الأكواد</Text>
+            <TextInput
+              style={[styles.input, { textAlign: "center" }]}
+              value={adminPass}
+              onChangeText={setAdminPass}
+              placeholder="كلمة المرور"
+              secureTextEntry
+            />
+            <TouchableOpacity style={[styles.btn, styles.primary]} onPress={confirmAdmin}>
+              <Text style={styles.btnText}>دخول</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setAdminModal(false)}>
+              <Text style={styles.close}>إلغاء</Text>
+            </TouchableOpacity>
+            {seeding && <ActivityIndicator style={{ marginTop: 10 }} />}
+          </View>
+        </View>
+      </Modal>
+
+      {/* ============ نافذة عرض الأكواد ============ */}
+      <Modal visible={codesListModal} transparent animationType="slide" onRequestClose={() => setCodesListModal(false)}>
+        <View style={styles.modalBg}>
+          <View style={[styles.modal, { maxHeight: "90%" }]}>
+            <Text style={styles.title}>📋 الـ 200 كود</Text>
+            <ScrollView style={{ maxHeight: 450 }}>
+              {allCodes.map((c, i) => (
+                <View key={i} style={styles.codeRow}>
+                  <Text style={styles.codeNum}>{i + 1}.</Text>
+                  <Text style={styles.codeText}>{c}</Text>
+                </View>
+              ))}
+            </ScrollView>
+            <TouchableOpacity style={[styles.btn, { backgroundColor: "#555" }]}
+              onPress={async () => { try { await Share.share({ message: allCodes.join("\n") }); } catch {} }}>
+              <Text style={styles.btnText}>📤 مشاركة كل الأكواد</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setCodesListModal(false)}>
+              <Text style={styles.close}>إغلاق</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </ScrollView>
+  );
+}
+
+// ==================== الأنماط ====================
+const styles = StyleSheet.create({
+  container: { padding: 20, paddingTop: 60, paddingBottom: 80, backgroundColor: "#FFF8F0", flexGrow: 1 },
+  center: { flex: 1, justifyContent: "center", alignItems: "center" },
+  h1: { fontSize: 28, fontWeight: "bold", textAlign: "center", color: "#2D2D2D" },
+  sub: { textAlign: "center", color: "#888", marginBottom: 24, marginTop: 4 },
+  label: { fontSize: 16, marginBottom: 8, textAlign: "right", color: "#444", fontWeight: "600" },
+  input: { backgroundColor: "#fff", borderWidth: 1, borderColor: "#E5D5C5", borderRadius: 12, padding: 14, fontSize: 16, marginBottom: 16 },
+  imgBtn: { alignSelf: "center", marginBottom: 16 },
+  photo: { width: 130, height: 130, borderRadius: 65, borderWidth: 3, borderColor: "#fff" },
+  photoPlaceholder: { width: 130, height: 130, borderRadius: 65, backgroundColor: "#fff", borderWidth: 2, borderColor: "#E5D5C5", borderStyle: "dashed", alignItems: "center", justifyContent: "center" },
+  smallText: { textAlign: "center", color: "#777", fontSize: 12, marginTop: 4 },
+  btn: { backgroundColor: "#F4A261", padding: 15, borderRadius: 12, alignItems: "center", marginBottom: 12 },
+  primary: { backgroundColor: "#2A9D8F" },
+  btnText: { color: "#fff", fontSize: 16, fontWeight: "bold" },
+  title: { fontSize: 22, fontWeight: "bold", textAlign: "center", marginBottom: 16, color: "#264653" },
+  countBox: { backgroundColor: "#F0F7F5", borderRadius: 12, padding: 12, marginBottom: 14, alignItems: "center" },
+  countText: { fontSize: 15, color: "#333" },
+  countHint: { fontSize: 13, color: "#777", marginTop: 4 },
+  panel: { backgroundColor: "#fff", borderRadius: 16, padding: 12, marginBottom: 14, borderWidth: 1, borderColor: "#EEE" },
+  panelImg: { width: "100%", height: 200, borderRadius: 12, marginBottom: 10 },
+  charOverlay: { position: "absolute", bottom: 20, left: 20, padding: 8, borderRadius: 30 },
+  panelBadge: { position: "absolute", top: 20, right: 20, backgroundColor: "rgba(0,0,0,0.6)", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
+  panelText: { fontSize: 17, lineHeight: 26, textAlign: "right", color: "#333" },
+  modalBg: { flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "center", padding: 20 },
+  modal: { backgroundColor: "#fff", borderRadius: 20, padding: 22, maxHeight: "85%" },
+  modalText: { fontSize: 15, lineHeight: 23, textAlign: "right", color: "#444", marginBottom: 10 },
+  infoBox: { backgroundColor: "#F0F7F5", borderRadius: 12, padding: 16, marginBottom: 14 },
+  infoLabel: { fontSize: 13, color: "#666", textAlign: "right", marginTop: 6 },
+  infoValue: { fontSize: 18, fontWeight: "bold", color: "#2A9D8F", textAlign: "right" },
+  instaBtn: { backgroundColor: "#E1306C", padding: 14, borderRadius: 12, alignItems: "center", marginBottom: 10 },
+  charGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between" },
+  charCard: { width: "31%", padding: 12, marginBottom: 10, backgroundColor: "#fff", borderRadius: 14, borderWidth: 2, alignItems: "center" },
+  charName: { fontSize: 13, marginTop: 6, color: "#333", textAlign: "center" },
+  close: { textAlign: "center", color: "#888", marginTop: 10 },
+  codeRow: { flexDirection: "row", alignItems: "center", paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: "#f0f0f0" },
+  codeNum: { width: 40, color: "#888", fontSize: 12 },
+  codeText: { fontFamily: "monospace", fontSize: 14, color: "#333", letterSpacing: 1 },
+});
